@@ -1168,24 +1168,25 @@ public class MoonCourierCrisisGame : MonoBehaviour
             data.orders.Add(NewOrder("D1-MED",   "Срочный медицинский груз",
                 27, 430, 1, MED_RISK, "CRATER", MED));
 
-            // Намеренно невыполнимый сценарий по весу.
-            data.orders.Add(NewOrder("D1-DRILL", "Груз для буровой установки",
-                90, 800, 2, DRILL_RISK, "CRATER", DRILL));
+            data.orders.Add(NewOrder("D1-DRILL", "Расходники для буровой установки",
+                45, 390, 2, DRILL_RISK, "CRATER", DRILL));
         }
         else if (day == 2)
         {
-            // Те же места, другие реальные потребности базы.
+            // День стратегического выбора.
             data.orders.Add(NewOrder("D2-GEO", "Кислородные баллоны для геологов",
                 30, 220, 2, GEO_RISK, "SAFE", GEO));
 
             data.orders.Add(NewOrder("D2-OBS", "Аккумуляторы для обсерватории",
                 38, 330, 2, OBS_RISK, "ROUGH", OBS));
 
-            data.orders.Add(NewOrder("D2-DRILL", "Комплект бурового инструмента",
-                62, 540, 1, DRILL_RISK, "CRATER", DRILL));
+            // Обе заявки тяжелее лимита ЗЕНИТА (55 кг), поэтому их может
+            // взять только ВЕКТОР (70 кг).
+            data.orders.Add(NewOrder("D2-MED-HEAVY", "Криоконтейнер для медпоста",
+                60, 560, 1, MED_RISK, "CRATER", MED));
 
-            data.orders.Add(NewOrder("D2-ANT", "Запасной модуль антенны",
-                29, 270, 3, ANT_RISK, "ROUGH", ANT));
+            data.orders.Add(NewOrder("D2-DRILL-HEAVY", "Энергомодуль буровой установки",
+                68, 700, 1, DRILL_RISK, "CRATER", DRILL));
         }
         else
         {
@@ -1210,9 +1211,9 @@ public class MoonCourierCrisisGame : MonoBehaviour
     string DayBrief(int day)
     {
         if (day == 1)
-            return "4 заявки // от безопасных 20% до опасных 52% // один груз намеренно слишком тяжёлый";
+            return "4 заявки // от безопасных 20% до опасных 52% // все рейсы по отдельности выполнимы";
         if (day == 2)
-            return "4 новые заявки // больше тяжёлых грузов // буровая теперь выполнима только тяжёлым ровером";
+            return "4 новые заявки // две тяжёлые доступны только ВЕКТОРУ // заряда хватит только на одну из них";
         return "5 финальных заявок // максимальные награды // тяжёлые грузы требуют грамотного распределения роверов";
     }
 
@@ -2130,8 +2131,9 @@ public class MoonCourierCrisisGame : MonoBehaviour
                 path=null
             };
 
-        // Единственный гарантированно невыполнимый стартовый заказ —
-        // 90 кг для буровой установки. Причина только в грузоподъёмности.
+        // Проверка грузоподъёмности применяется ко всем заявкам.
+        // Во 2-й день две тяжёлые заявки проходят эту проверку только у ВЕКТОРА,
+        // а невозможность закрыть обе возникает уже из-за ограниченной батареи.
         if (o.weight > r.capacity)
             return new RouteCalc
             {
@@ -2164,6 +2166,16 @@ public class MoonCourierCrisisGame : MonoBehaviour
         // 0.78 — игровой масштаб: обычный рейс обычно забирает ~30–60% батареи.
         float rawNeeded = weightedDistance * 2f * .78f * weightMult;
         float needed = Mathf.Clamp(rawNeeded,8f,100f);
+
+        // День 2: осознанный выбор ограниченного ресурса.
+        // Обе тяжёлые заявки может взять только ВЕКТОР.
+        // Стоимость 47% + 60% = 107%.
+        // Даже лучшее батарейное событие (+6%) не позволяет закрыть обе
+        // за один день: после первой на вторую всё равно не хватает заряда.
+        if (r.id == "R3" && o.id == "D2-MED-HEAVY")
+            needed = 47f;
+        else if (r.id == "R3" && o.id == "D2-DRILL-HEAVY")
+            needed = 60f;
 
         if (r.battery < needed)
             return new RouteCalc
@@ -2314,7 +2326,7 @@ public class MoonCourierCrisisGame : MonoBehaviour
         try { File.WriteAllText(SavePath(), JsonUtility.ToJson(data,true)); } catch { }
     }
 
-    string SavePath() => Path.Combine(Application.persistentDataPath, "moon_courier_crisis_player_v23_toastfix_save.json");
+    string SavePath() => Path.Combine(Application.persistentDataPath, "moon_courier_crisis_player_v24_strategicchoice_save.json");
 
     void AnimateWorld()
     {
