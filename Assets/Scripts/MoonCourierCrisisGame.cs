@@ -50,6 +50,7 @@ public class MoonCourierCrisisGame : MonoBehaviour
         public bool success;
         public int reward;
         public string eventText;
+        public int day;
     }
 
     [Serializable]
@@ -59,6 +60,8 @@ public class MoonCourierCrisisGame : MonoBehaviour
         public int score;
         public int day;
         public int deliveriesToday;
+        public int dayStartCredits;
+        public int dayStartScore;
         public List<RoverData> rovers = new List<RoverData>();
         public List<OrderData> orders = new List<OrderData>();
         public List<DeliveryData> deliveries = new List<DeliveryData>();
@@ -190,10 +193,25 @@ public class MoonCourierCrisisGame : MonoBehaviour
     private Image batteryFill, riskFill;
     private Button launchButton, serviceButton, nextDayButton;
     private Text launchText, serviceText, nextDayButtonText;
-    private GameObject startOverlay, summaryOverlay, toastPanel;
-    private Text toastText, summaryText;
+    private GameObject startOverlay, summaryOverlay, toastPanel, pauseOverlay;
+    private GameObject pauseMainPanel, pauseSettingsPanel;
+    private Text toastText, summaryText, summaryTitle, summaryActionText;
+    private Text displayModeText, resolutionText, pauseStatusText;
+    private Button summaryActionButton;
     private float toastTimer;
     private bool shiftStarted;
+    private bool pauseMenuOpen;
+    private bool shiftStartedBeforePause;
+    private int displayModeIndex;
+    private int resolutionIndex;
+
+    private readonly Vector2Int[] displayResolutions =
+    {
+        new Vector2Int(1280,720),
+        new Vector2Int(1600,900),
+        new Vector2Int(1920,1080),
+        new Vector2Int(2560,1440)
+    };
 
     // Palette
     private readonly Color bg = Hex("071019");
@@ -210,10 +228,10 @@ public class MoonCourierCrisisGame : MonoBehaviour
     void Start()
     {
         Application.targetFrameRate = 120;
-        QualitySettings.vSyncCount = 1;
         QualitySettings.antiAliasing = 4;
         RenderSettings.fog = false;
         SetupInputSystem();
+        InitDisplaySettings();
         LoadRuntimeShaders();
         BuildWorld();
         BuildUI();
@@ -225,7 +243,17 @@ public class MoonCourierCrisisGame : MonoBehaviour
 
     void Update()
     {
-        AnimateWorld();
+#if ENABLE_INPUT_SYSTEM
+        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+            TogglePauseMenu();
+#else
+        if (Input.GetKeyDown(KeyCode.Escape))
+            TogglePauseMenu();
+#endif
+
+        // При открытом ESC-меню игровое время стоит.
+        if (!pauseMenuOpen)
+            AnimateWorld();
 
         if (toastPanel != null && toastPanel.activeSelf)
         {
@@ -233,7 +261,7 @@ public class MoonCourierCrisisGame : MonoBehaviour
             if (toastTimer <= 0f) toastPanel.SetActive(false);
         }
 
-        if (!shiftStarted || deliveryAnimating || cam == null) return;
+        if (pauseMenuOpen || !shiftStarted || deliveryAnimating || cam == null) return;
 
         bool pressed = false;
         Vector2 pointer = Vector2.zero;
@@ -850,7 +878,7 @@ public class MoonCourierCrisisGame : MonoBehaviour
         CreateTopStat(top.transform, "ОЧКИ", out scoreText, 1060);
         CreateTopStat(top.transform, "ДОСТАВКИ", out deliveriesText, 1205);
 
-        nextDayButton = MakeButton(top.transform, "СЛЕДУЮЩИЙ ДЕНЬ", Vector2.zero, new Vector2(158,42),
+        nextDayButton = MakeButton(top.transform, "ЗАВЕРШИТЬ ДЕНЬ", Vector2.zero, new Vector2(158,42),
             NextDay, Hex("14314A"), text);
         AnchorRight(nextDayButton.GetComponent<RectTransform>(), 142,17,158,42);
         nextDayButtonText = nextDayButton.GetComponentInChildren<Text>();
@@ -954,6 +982,231 @@ public class MoonCourierCrisisGame : MonoBehaviour
 
         BuildStartOverlay(canvas.transform);
         BuildSummaryOverlay(canvas.transform);
+        BuildPauseOverlay(canvas.transform);
+    }
+
+    void InitDisplaySettings()
+    {
+        displayModeIndex =
+            Screen.fullScreenMode == FullScreenMode.Windowed ? 0 : 1;
+
+        resolutionIndex = 0;
+        int bestDistance = int.MaxValue;
+
+        for (int i=0; i<displayResolutions.Length; i++)
+        {
+            int d =
+                Mathf.Abs(displayResolutions[i].x - Screen.width) +
+                Mathf.Abs(displayResolutions[i].y - Screen.height);
+
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                resolutionIndex = i;
+            }
+        }
+    }
+
+    void BuildPauseOverlay(Transform parent)
+    {
+        pauseOverlay = MakePanel(parent,"ESC меню",Vector2.zero,Vector2.zero,
+            Vector2.zero,Vector2.one,new Color(bg.r,bg.g,bg.b,.94f));
+        Stretch(pauseOverlay.GetComponent<RectTransform>(),0,0,0,0);
+
+        pauseMainPanel = MakePanel(pauseOverlay.transform,"Главное меню паузы",
+            new Vector2(0,-225),new Vector2(560,500),
+            new Vector2(.5f,1),new Vector2(.5f,1),
+            new Color(panel.r,panel.g,panel.b,.99f));
+        pauseMainPanel.GetComponent<RectTransform>().pivot = new Vector2(.5f,1);
+        AddAccentLine(pauseMainPanel.transform,cyan,false);
+
+        var title = MakeText(pauseMainPanel.transform,"ПАУЗА",38,FontStyle.Bold,text);
+        title.alignment = TextAnchor.MiddleCenter;
+        SetRect(title.rectTransform,0,-42,460,58,new Vector2(.5f,1));
+
+        var resume = MakeButton(pauseMainPanel.transform,"ПРОДОЛЖИТЬ",
+            Vector2.zero,new Vector2(350,58),
+            ClosePauseMenu,Hex("17394D"),text);
+        SetRect(resume.GetComponent<RectTransform>(),0,-145,350,58,new Vector2(.5f,1));
+
+        var settings = MakeButton(pauseMainPanel.transform,"НАСТРОЙКИ",
+            Vector2.zero,new Vector2(350,58),
+            ShowSettingsPage,Hex("17394D"),text);
+        SetRect(settings.GetComponent<RectTransform>(),0,-225,350,58,new Vector2(.5f,1));
+
+        var quit = MakeButton(pauseMainPanel.transform,"ВЫЙТИ ИЗ ИГРЫ",
+            Vector2.zero,new Vector2(350,58),
+            QuitGame,Hex("17394D"),text);
+        SetRect(quit.GetComponent<RectTransform>(),0,-305,350,58,new Vector2(.5f,1));
+
+        var saveHint = MakeText(pauseMainPanel.transform,
+            "Перед выходом текущая смена сохраняется.",
+            11,FontStyle.Normal,muted);
+        saveHint.alignment = TextAnchor.MiddleCenter;
+        SetRect(saveHint.rectTransform,0,-385,420,24,new Vector2(.5f,1));
+
+        pauseSettingsPanel = MakePanel(pauseOverlay.transform,"Настройки",
+            new Vector2(0,-225),new Vector2(620,510),
+            new Vector2(.5f,1),new Vector2(.5f,1),
+            new Color(panel.r,panel.g,panel.b,.99f));
+        pauseSettingsPanel.GetComponent<RectTransform>().pivot = new Vector2(.5f,1);
+        AddAccentLine(pauseSettingsPanel.transform,cyan,false);
+
+        var settingsTitle = MakeText(pauseSettingsPanel.transform,"НАСТРОЙКИ",34,FontStyle.Bold,text);
+        settingsTitle.alignment = TextAnchor.MiddleCenter;
+        SetRect(settingsTitle.rectTransform,0,-34,520,54,new Vector2(.5f,1));
+
+        MakeSmallLabel(pauseSettingsPanel.transform,"РЕЖИМ ЭКРАНА",120,-116);
+        var modeButton = MakeButton(pauseSettingsPanel.transform,"",
+            Vector2.zero,new Vector2(390,52),
+            CycleDisplayMode,card2,text);
+        SetRect(modeButton.GetComponent<RectTransform>(),0,-145,390,52,new Vector2(.5f,1));
+        displayModeText = modeButton.GetComponentInChildren<Text>();
+
+        MakeSmallLabel(pauseSettingsPanel.transform,"РАЗРЕШЕНИЕ",120,-218);
+        var resolutionButton = MakeButton(pauseSettingsPanel.transform,"",
+            Vector2.zero,new Vector2(390,52),
+            CycleResolution,card2,text);
+        SetRect(resolutionButton.GetComponent<RectTransform>(),0,-247,390,52,new Vector2(.5f,1));
+        resolutionText = resolutionButton.GetComponentInChildren<Text>();
+
+        var apply = MakeButton(pauseSettingsPanel.transform,"ПРИМЕНИТЬ",
+            Vector2.zero,new Vector2(390,54),
+            ApplyDisplaySettings,Hex("0B708E"),text);
+        SetRect(apply.GetComponent<RectTransform>(),0,-330,390,54,new Vector2(.5f,1));
+
+        pauseStatusText = MakeText(pauseSettingsPanel.transform,"",11,FontStyle.Bold,green);
+        pauseStatusText.alignment = TextAnchor.MiddleCenter;
+        SetRect(pauseStatusText.rectTransform,0,-391,470,24,new Vector2(.5f,1));
+
+        var back = MakeButton(pauseSettingsPanel.transform,"НАЗАД",
+            Vector2.zero,new Vector2(390,52),
+            ShowPauseMainPage,Hex("172735"),text);
+        SetRect(back.GetComponent<RectTransform>(),0,-427,390,52,new Vector2(.5f,1));
+
+        RefreshDisplaySettingsLabels();
+        pauseSettingsPanel.SetActive(false);
+        pauseOverlay.SetActive(false);
+    }
+
+    void ShowSettingsPage()
+    {
+        InitDisplaySettings();
+        RefreshDisplaySettingsLabels();
+        if (pauseStatusText != null) pauseStatusText.text = "";
+        if (pauseMainPanel != null) pauseMainPanel.SetActive(false);
+        if (pauseSettingsPanel != null) pauseSettingsPanel.SetActive(true);
+    }
+
+    void ShowPauseMainPage()
+    {
+        if (pauseSettingsPanel != null) pauseSettingsPanel.SetActive(false);
+        if (pauseMainPanel != null) pauseMainPanel.SetActive(true);
+    }
+
+    string DisplayModeLabel()
+    {
+        return displayModeIndex == 0 ? "ОКОННЫЙ" : "ПОЛНЫЙ ЭКРАН";
+    }
+
+    FullScreenMode SelectedFullScreenMode()
+    {
+        return displayModeIndex == 0
+            ? FullScreenMode.Windowed
+            : FullScreenMode.FullScreenWindow;
+    }
+
+    void RefreshDisplaySettingsLabels()
+    {
+        if (displayModeText != null)
+            displayModeText.text = DisplayModeLabel();
+
+        if (resolutionText != null)
+        {
+            Vector2Int r = displayResolutions[Mathf.Clamp(
+                resolutionIndex,0,displayResolutions.Length-1)];
+            resolutionText.text = $"{r.x} × {r.y}";
+        }
+    }
+
+    void CycleDisplayMode()
+    {
+        displayModeIndex = (displayModeIndex + 1) % 2;
+        RefreshDisplaySettingsLabels();
+        if (pauseStatusText != null)
+            pauseStatusText.text = "Есть неприменённые изменения.";
+    }
+
+    void CycleResolution()
+    {
+        resolutionIndex = (resolutionIndex + 1) % displayResolutions.Length;
+        RefreshDisplaySettingsLabels();
+        if (pauseStatusText != null)
+            pauseStatusText.text = "Есть неприменённые изменения.";
+    }
+
+    void ApplyDisplaySettings()
+    {
+        Vector2Int r = displayResolutions[Mathf.Clamp(
+            resolutionIndex,0,displayResolutions.Length-1)];
+
+        Screen.SetResolution(r.x,r.y,SelectedFullScreenMode());
+
+        if (pauseStatusText != null)
+            pauseStatusText.text =
+                $"ПРИМЕНЕНО: {r.x} × {r.y}  //  {DisplayModeLabel()}";
+    }
+
+    void TogglePauseMenu()
+    {
+        if (pauseMenuOpen) ClosePauseMenu();
+        else OpenPauseMenu();
+    }
+
+    void OpenPauseMenu()
+    {
+        if (pauseOverlay == null) return;
+
+        pauseMenuOpen = true;
+        shiftStartedBeforePause = shiftStarted;
+        shiftStarted = false;
+        Time.timeScale = 0f;
+
+        InitDisplaySettings();
+        RefreshDisplaySettingsLabels();
+        if (pauseStatusText != null) pauseStatusText.text = "";
+
+        ShowPauseMainPage();
+        pauseOverlay.SetActive(true);
+    }
+
+    void ClosePauseMenu()
+    {
+        if (!pauseMenuOpen) return;
+
+        pauseMenuOpen = false;
+        Time.timeScale = 1f;
+
+        if (pauseOverlay != null)
+            pauseOverlay.SetActive(false);
+
+        bool blockedByOverlay =
+            (startOverlay != null && startOverlay.activeSelf) ||
+            (summaryOverlay != null && summaryOverlay.activeSelf);
+
+        shiftStarted = shiftStartedBeforePause && !blockedByOverlay;
+    }
+
+    void QuitGame()
+    {
+        Save();
+        Time.timeScale = 1f;
+
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 
     void BuildStartOverlay(Transform parent)
@@ -982,7 +1235,9 @@ public class MoonCourierCrisisGame : MonoBehaviour
             "За 3 лунных дня заработайте как можно больше кредитов и очков.\n\n" +
             "Точки назначения постоянны, но каждый новый день приносит новые заявки.\n" +
             "Невыполненные заявки в конце дня становятся просроченными.\n" +
-            "Повреждённый ровер нужно диагностировать и отремонтировать.",
+            "При завершении дня сначала показываются итоги, затем можно перейти дальше.\n" +
+            "Повреждённый ровер нужно диагностировать и отремонтировать.\n" +
+            "ESC — пауза, настройки экрана и выход из игры.",
             16,FontStyle.Normal,text);
         introText.alignment = TextAnchor.UpperLeft;
         introText.lineSpacing = 1.18f;
@@ -995,22 +1250,44 @@ public class MoonCourierCrisisGame : MonoBehaviour
 
     void BuildSummaryOverlay(Transform parent)
     {
-        summaryOverlay = MakePanel(parent,"Итоги смены",Vector2.zero,Vector2.zero,
-            Vector2.zero,Vector2.one,new Color(bg.r,bg.g,bg.b,.96f));
+        summaryOverlay = MakePanel(parent,"Итоги дня",Vector2.zero,Vector2.zero,
+            Vector2.zero,Vector2.one,new Color(bg.r,bg.g,bg.b,.965f));
         Stretch(summaryOverlay.GetComponent<RectTransform>(),0,0,0,0);
 
-        var title = MakeText(summaryOverlay.transform,"СМЕНА ЗАВЕРШЕНА",40,FontStyle.Bold,text);
-        title.alignment = TextAnchor.MiddleCenter;
-        SetRect(title.rectTransform,0,-300,800,60,new Vector2(.5f,1));
+        // Центральная карточка поверх карты.
+        var cardPanel = MakePanel(summaryOverlay.transform,"Карточка итогов",
+            new Vector2(0,-225),new Vector2(760,500),
+            new Vector2(.5f,1),new Vector2(.5f,1),
+            new Color(panel.r,panel.g,panel.b,.985f));
+        cardPanel.GetComponent<RectTransform>().pivot = new Vector2(.5f,1);
 
-        summaryText = MakeText(summaryOverlay.transform,"",20,FontStyle.Normal,muted);
-        summaryText.alignment = TextAnchor.MiddleCenter;
-        summaryText.lineSpacing = 1.35f;
-        SetRect(summaryText.rectTransform,0,-390,760,180,new Vector2(.5f,1));
+        summaryTitle = MakeText(cardPanel.transform,"ИТОГИ ДНЯ",34,FontStyle.Bold,text);
+        summaryTitle.alignment = TextAnchor.MiddleCenter;
+        SetRect(summaryTitle.rectTransform,0,-32,680,54,new Vector2(.5f,1));
 
-        var restartButton = MakeButton(summaryOverlay.transform,"НОВАЯ СМЕНА",Vector2.zero,new Vector2(280,58),
-            RestartFromSummary,Hex("0B708E"),text);
-        SetRect(restartButton.GetComponent<RectTransform>(),0,-610,280,58,new Vector2(.5f,1));
+        var line = MakePanel(cardPanel.transform,"Разделитель",
+            new Vector2(0,-100),new Vector2(620,2),
+            new Vector2(.5f,1),new Vector2(.5f,1),
+            new Color(cyan.r,cyan.g,cyan.b,.70f));
+        line.GetComponent<RectTransform>().pivot = new Vector2(.5f,1);
+
+        summaryText = MakeText(cardPanel.transform,"",18,FontStyle.Normal,text);
+        summaryText.alignment = TextAnchor.UpperCenter;
+        summaryText.lineSpacing = 1.25f;
+        SetRect(summaryText.rectTransform,0,-125,650,245,new Vector2(.5f,1));
+
+        summaryActionButton = MakeButton(cardPanel.transform,"ПЕРЕЙТИ К СЛЕДУЮЩЕМУ ДНЮ",
+            Vector2.zero,new Vector2(330,58),
+            ConfirmDaySummary,Hex("0B708E"),text);
+        SetRect(summaryActionButton.GetComponent<RectTransform>(),0,-398,330,58,new Vector2(.5f,1));
+        summaryActionText = summaryActionButton.GetComponentInChildren<Text>();
+
+        var hint = MakeText(cardPanel.transform,
+            "Невыполненные заявки текущего дня считаются просроченными.",
+            11,FontStyle.Normal,muted);
+        hint.alignment = TextAnchor.MiddleCenter;
+        SetRect(hint.rectTransform,0,-462,620,22,new Vector2(.5f,1));
+
         summaryOverlay.SetActive(false);
     }
 
@@ -1027,37 +1304,141 @@ public class MoonCourierCrisisGame : MonoBehaviour
         ShowToast("Смена началась. Выберите ровер и первый заказ.");
     }
 
-    void ShowSummary()
+    void ShowDaySummary()
     {
-        if (summaryOverlay == null) return;
+        if (summaryOverlay == null || deliveryAnimating) return;
+
         shiftStarted = false;
 
         int successes = 0;
         int failures = 0;
         foreach (var d in data.deliveries)
         {
+            if (d.day != data.day) continue;
             if (d.success) successes++;
             else failures++;
         }
 
-        string rating =
-            data.credits >= 2200 ? "S  //  ЛЕГЕНДА ЛУННОЙ ЛОГИСТИКИ" :
-            data.credits >= 1600 ? "A  //  ОТЛИЧНАЯ СМЕНА" :
-            data.credits >= 1000 ? "B  //  БАЗА ОБЕСПЕЧЕНА" :
-                                   "C  //  СМЕНА ЗАВЕРШЕНА";
+        int expired = 0;
+        foreach (var o in data.orders)
+            if (o.status == "Ожидает") expired++;
 
-        summaryText.text =
-            $"КРЕДИТЫ:  {data.credits}\n" +
-            $"ОЧКИ:  {data.score}\n" +
-            $"УСПЕШНЫЕ ДОСТАВКИ:  {successes}\n" +
-            $"АВАРИИ:  {failures}\n\n" +
-            $"РЕЙТИНГ:  {rating}";
+        int creditDelta = data.credits - data.dayStartCredits;
+        int scoreDelta = data.score - data.dayStartScore;
+
+        string creditSign = creditDelta > 0 ? "+" : "";
+        string scoreSign = scoreDelta > 0 ? "+" : "";
+
+        if (data.day < 3)
+        {
+            summaryTitle.text = $"ДЕНЬ {data.day} ЗАВЕРШЁН";
+
+            summaryText.text =
+                $"УСПЕШНЫЕ ДОСТАВКИ:  {successes}\n" +
+                $"АВАРИИ:  {failures}\n" +
+                $"ПРОСРОЧЕНО ЗАЯВОК:  {expired}\n\n" +
+                $"КРЕДИТЫ ЗА ДЕНЬ:  {creditSign}{creditDelta}\n" +
+                $"ОЧКИ ЗА ДЕНЬ:  {scoreSign}{scoreDelta}\n\n" +
+                $"ТЕКУЩИЙ БАЛАНС:  {data.credits} кр.   //   {data.score} очков";
+
+            if (summaryActionText != null)
+                summaryActionText.text = $"ПЕРЕЙТИ К ДНЮ {data.day + 1}";
+        }
+        else
+        {
+            int allSuccesses = 0;
+            int allFailures = 0;
+            foreach (var d in data.deliveries)
+            {
+                if (d.success) allSuccesses++;
+                else allFailures++;
+            }
+
+            string rating =
+                data.credits >= 2200 ? "S  //  ЛЕГЕНДА ЛУННОЙ ЛОГИСТИКИ" :
+                data.credits >= 1600 ? "A  //  ОТЛИЧНАЯ СМЕНА" :
+                data.credits >= 1000 ? "B  //  БАЗА ОБЕСПЕЧЕНА" :
+                                       "C  //  СМЕНА ЗАВЕРШЕНА";
+
+            summaryTitle.text = "ТРИ ЛУННЫХ ДНЯ ЗАВЕРШЕНЫ";
+
+            summaryText.text =
+                $"ДЕНЬ 3:  {successes} доставок   //   {failures} аварий   //   {expired} просрочено\n\n" +
+                $"ВСЕГО УСПЕШНЫХ ДОСТАВОК:  {allSuccesses}\n" +
+                $"ВСЕГО АВАРИЙ:  {allFailures}\n" +
+                $"КРЕДИТЫ:  {data.credits}\n" +
+                $"ОЧКИ:  {data.score}\n\n" +
+                $"РЕЙТИНГ:  {rating}";
+
+            if (summaryActionText != null)
+                summaryActionText.text = "НОВАЯ СМЕНА";
+        }
 
         summaryOverlay.SetActive(true);
     }
 
+    void ConfirmDaySummary()
+    {
+        if (data.day >= 3)
+        {
+            int expiredFinal = 0;
+            foreach (var o in data.orders)
+                if (o.status == "Ожидает") expiredFinal++;
+
+            AddEvent($"СМЕНА ЗАВЕРШЕНА // день 3 // просрочено: {expiredFinal} // кредиты: {data.credits} // очки: {data.score}");
+            Save();
+            RestartFromSummary();
+            return;
+        }
+
+        AdvanceToNextDay();
+    }
+
+    void AdvanceToNextDay()
+    {
+        int expired = 0;
+        foreach (var o in data.orders)
+            if (o.status == "Ожидает") expired++;
+
+        AddEvent($"ДЕНЬ {data.day} ЗАВЕРШЁН // просрочено заявок: {expired}");
+
+        data.day++;
+        data.deliveriesToday = 0;
+        selectedOrder = null;
+
+        // Ночная подзарядка. Повреждение само не исчезает.
+        foreach (var r in data.rovers)
+        {
+            r.battery = Mathf.Min(100f, r.battery + 65f);
+            if (r.status == "В пути") r.status = "Готов";
+        }
+
+        PopulateOrdersForDay(data.day);
+
+        // Новая точка отсчёта нужна для итогов следующего дня.
+        data.dayStartCredits = data.credits;
+        data.dayStartScore = data.score;
+
+        AddEvent($"ДЕНЬ {data.day} // получены новые заявки в постоянных точках");
+        AddEvent($"БРИФИНГ // {DayBrief(data.day)}");
+
+        Save();
+
+        SpawnGameObjects();
+        UpdateSelections();
+        RefreshUI();
+
+        if (summaryOverlay != null) summaryOverlay.SetActive(false);
+        shiftStarted = true;
+
+        ShowToast($"День {data.day}: получены новые заявки.");
+    }
+
     void RestartFromSummary()
     {
+        Time.timeScale = 1f;
+        pauseMenuOpen = false;
+        if (pauseOverlay != null) pauseOverlay.SetActive(false);
         if (summaryOverlay != null) summaryOverlay.SetActive(false);
         NewGame();
         shiftStarted = true;
@@ -1106,6 +1487,11 @@ public class MoonCourierCrisisGame : MonoBehaviour
             PopulateOrdersForDay(data.day);
         if (data.deliveries == null) data.deliveries = new List<DeliveryData>();
         if (data.events == null) data.events = new List<string>();
+
+        // Для старого/неполного сохранения не допускаем пустую точку отсчёта дня.
+        if (data.dayStartCredits == 0 && data.day == 1 && data.credits > 0)
+            data.dayStartCredits = 120;
+
         foreach (var r in data.rovers)
         {
             if (string.IsNullOrEmpty(r.status)) r.status = "Готов";
@@ -1115,7 +1501,15 @@ public class MoonCourierCrisisGame : MonoBehaviour
 
     void CreateFreshData()
     {
-        data = new GameSave { credits = 120, score = 0, day = 1, deliveriesToday = 0 };
+        data = new GameSave
+        {
+            credits = 120,
+            score = 0,
+            day = 1,
+            deliveriesToday = 0,
+            dayStartCredits = 120,
+            dayStartScore = 0
+        };
         data.rovers.Add(NewRover("R1", "ОРИОН", 100, 35, new Vector3(-4.0f,.5f,-3.2f)));
         data.rovers.Add(NewRover("R2", "ЗЕНИТ", 78, 55, new Vector3(0,.5f,-3.2f)));
         data.rovers.Add(NewRover("R3", "ВЕКТОР", 48, 70, new Vector3(4.0f,.5f,-3.2f)));
@@ -1268,8 +1662,21 @@ public class MoonCourierCrisisGame : MonoBehaviour
             Primitive(PrimitiveType.Cube,root.transform,"SolarCell",
                 new Vector3(i*.76f,1.28f,.20f),new Vector3(.68f,.07f,1.45f),Hex("123D5B"));
 
-        Primitive(PrimitiveType.Cube, root.transform, "Cargo Bay",
-            new Vector3(0,1.05f,.82f),new Vector3(1.4f,.52f,.92f),Hex("E3B85C"));
+        // Пустая грузовая площадка. Пока игрок НЕ запустил рейс,
+        // на ровере нет никакого контейнера.
+        Primitive(PrimitiveType.Cube, root.transform, "Empty Cargo Deck",
+            new Vector3(0,1.05f,1.02f),new Vector3(1.48f,.12f,.92f),Hex("354149"));
+
+        for (int side=-1; side<=1; side+=2)
+        {
+            Primitive(PrimitiveType.Cube, root.transform, "Cargo Rail",
+                new Vector3(side*.66f,1.18f,1.02f),
+                new Vector3(.08f,.18f,.98f),Hex("68757D"));
+        }
+
+        Primitive(PrimitiveType.Cube, root.transform, "Cargo Stop",
+            new Vector3(0,1.18f,.58f),
+            new Vector3(1.38f,.18f,.08f),Hex("68757D"));
 
         Primitive(PrimitiveType.Cylinder,root.transform,"Sensor Mast",
             new Vector3(0,1.75f,-.62f),new Vector3(.10f,.50f,.10f),Hex("AAB8C0"));
@@ -1300,9 +1707,6 @@ public class MoonCourierCrisisGame : MonoBehaviour
             }
         }
 
-        var damageLamp = Primitive(PrimitiveType.Sphere, root.transform, "DamageIndicator",
-            new Vector3(.85f,1.52f,.82f), new Vector3(.20f,.20f,.20f), red);
-        damageLamp.SetActive(r.status == "Нужен осмотр" || r.status == "Требуется ремонт");
 
         var ring = Primitive(PrimitiveType.Cylinder, root.transform, "Selection Ring",
             new Vector3(0,.08f,0), new Vector3(1.8f,.018f,1.8f), new Color(cyan.r,cyan.g,cyan.b,.82f));
@@ -1310,6 +1714,17 @@ public class MoonCourierCrisisGame : MonoBehaviour
         ring.SetActive(selectedRover != null && selectedRover.id == r.id);
 
         CreateWorldLabel(root.transform, r.roverName, new Vector3(0,2.85f,0), roverAccent, 48);
+
+        // Если сохранение загрузилось уже с повреждённым ровером,
+        // дым должен быть виден сразу.
+        bool alreadyDamaged =
+            r.status == "Нужен осмотр" ||
+            r.status == "Требуется ремонт";
+
+        SetPersistentDamageSmoke(
+            root,
+            alreadyDamaged);
+
         return root;
     }
 
@@ -1378,17 +1793,23 @@ public class MoonCourierCrisisGame : MonoBehaviour
         Primitive(PrimitiveType.Cylinder,root.transform,"Основание маяка",
             new Vector3(0,.055f,0),new Vector3(.86f,.055f,.86f),Hex("19232A"));
 
-        // Контейнер компактный и симметричный — больше не выглядит "висящим".
-        Primitive(PrimitiveType.Cube,root.transform,"Контейнер",
+        // Груз заказа — отдельный объект.
+        var cargoVisual = new GameObject("CargoVisual");
+        cargoVisual.transform.SetParent(root.transform,false);
+
+        Primitive(PrimitiveType.Cube,cargoVisual.transform,"Контейнер",
             new Vector3(0,.31f,0),new Vector3(1.05f,.48f,.82f),Hex("D0D6D8"));
-        Primitive(PrimitiveType.Cube,root.transform,"Крышка",
+        Primitive(PrimitiveType.Cube,cargoVisual.transform,"Крышка",
             new Vector3(0,.58f,0),new Vector3(1.10f,.07f,.87f),Hex("EEF1F2"));
-        Primitive(PrimitiveType.Cube,root.transform,"Маркировка",
+        Primitive(PrimitiveType.Cube,cargoVisual.transform,"Маркировка",
             new Vector3(0,.31f,-.425f),new Vector3(.66f,.13f,.025f),c);
 
-        Primitive(PrimitiveType.Cylinder,root.transform,"Мачта",
+        // Маяк физически закреплён НА КОНТЕЙНЕРЕ.
+        // Поэтому при заборе заказа он уезжает вместе с грузом,
+        // а не остаётся висеть в воздухе.
+        Primitive(PrimitiveType.Cylinder,cargoVisual.transform,"Мачта",
             new Vector3(0,.86f,0),new Vector3(.06f,.30f,.06f),Hex("B8C5CB"));
-        var orb = Primitive(PrimitiveType.Sphere,root.transform,"Signal",
+        var orb = Primitive(PrimitiveType.Sphere,cargoVisual.transform,"Signal",
             new Vector3(0,1.20f,0),new Vector3(.34f,.34f,.34f),c);
 
         var light = orb.AddComponent<Light>();
@@ -1480,22 +1901,31 @@ public class MoonCourierCrisisGame : MonoBehaviour
         start.y = TerrainHeightAt(start.x,start.z) + RoverGroundOffset;
         end.y = TerrainHeightAt(end.x,end.z) + RoverGroundOffset;
 
-        // ЗЕНИТ стоит между двумя другими роверами.
-        // Он ВСЕГДА сначала выезжает строго прямо по центральному коридору,
-        // и только после этого поворачивает к заказу.
+        // У каждого ровера есть собственная прямая парковочная полоса.
+        // ОРИОН, ЗЕНИТ и ВЕКТОР сначала полностью выезжают вперёд из ряда
+        // на своём X и только после этого начинают поворачивать на маршрут.
         //
-        // Обратный путь строится простым Reverse(), поэтому при возвращении
-        // последние метры он также заезжает на парковку строго прямо.
-        if (movingRoverId == "R2" && start.z < -1.40f)
+        // Обратный путь строится через Reverse(), поэтому на возвращении
+        // ровер сначала приходит на выход СВОЕЙ полосы, а затем заезжает
+        // к парковочному месту строго по прямой, не пересекая соседей.
+        bool isParkingRover =
+            movingRoverId == "R1" ||
+            movingRoverId == "R2" ||
+            movingRoverId == "R3";
+
+        if (isParkingRover && start.z < -1.40f)
         {
+            const float parkingLaneExitZ = .45f;
+
             Vector3 laneExit = new Vector3(
                 start.x,
-                TerrainHeightAt(start.x,.45f) + RoverGroundOffset,
-                .45f
+                TerrainHeightAt(start.x,parkingLaneExitZ) + RoverGroundOffset,
+                parkingLaneExitZ
             );
 
-            // Строим основную часть пути уже ПОСЛЕ парковочного коридора.
-            List<Vector3> rest = BuildSafeRoute(laneExit,end,movingRoverId);
+            List<Vector3> rest =
+                BuildSafeRoute(laneExit,end,movingRoverId);
+
             if (rest == null || rest.Count == 0)
                 return null;
 
@@ -1503,8 +1933,7 @@ public class MoonCourierCrisisGame : MonoBehaviour
             result.Add(start);
             result.Add(laneExit);
 
-            // Не дублируем первую точку rest == laneExit.
-            for (int i = 1; i < rest.Count; i++)
+            for (int i=1; i<rest.Count; i++)
                 result.Add(rest[i]);
 
             return result;
@@ -1788,62 +2217,141 @@ public class MoonCourierCrisisGame : MonoBehaviour
         Vector3 home = roverGo.transform.position;
         Quaternion homeRotation = roverGo.transform.rotation;
 
+        // С базы ровер всегда едет пустым.
         yield return StartCoroutine(MoveRoverAlongPath(roverGo,path,5.6f));
-        yield return new WaitForSeconds(.28f);
+        yield return new WaitForSeconds(.12f);
 
+        GameObject orderGo = orderObjects.ContainsKey(order.id)
+            ? orderObjects[order.id]
+            : null;
+
+        // Событие и риск определяются уже в точке заказа.
         RouteRandomEvent randomEvent = RollRouteRandomEvent();
+
         if (!string.IsNullOrEmpty(randomEvent.title))
         {
-            rover.battery = Mathf.Clamp(rover.battery + randomEvent.batteryDelta,0f,100f);
-            data.credits = Mathf.Max(0,data.credits + randomEvent.creditDelta);
+            rover.battery = Mathf.Clamp(
+                rover.battery + randomEvent.batteryDelta,0f,100f);
+            data.credits = Mathf.Max(
+                0,data.credits + randomEvent.creditDelta);
             data.score += randomEvent.scoreDelta;
 
             string delta = "";
-            if (randomEvent.batteryDelta > 0) delta += $"  +{randomEvent.batteryDelta:0}% батареи";
-            if (randomEvent.batteryDelta < 0) delta += $"  {randomEvent.batteryDelta:0}% батареи";
-            if (randomEvent.creditDelta > 0) delta += $"  +{randomEvent.creditDelta} кр.";
-            if (randomEvent.scoreDelta > 0) delta += $"  +{randomEvent.scoreDelta} очков";
+            if (randomEvent.batteryDelta > 0)
+                delta += $"  +{randomEvent.batteryDelta:0}% батареи";
+            if (randomEvent.batteryDelta < 0)
+                delta += $"  {randomEvent.batteryDelta:0}% батареи";
+            if (randomEvent.creditDelta > 0)
+                delta += $"  +{randomEvent.creditDelta} кр.";
+            if (randomEvent.scoreDelta > 0)
+                delta += $"  +{randomEvent.scoreDelta} очков";
 
-            AddEvent($"СЛУЧАЙНОЕ СОБЫТИЕ // {randomEvent.title} // {randomEvent.description}{delta}");
-            yield return new WaitForSeconds(.55f);
+            AddEvent(
+                $"СЛУЧАЙНОЕ СОБЫТИЕ // {randomEvent.title} // {randomEvent.description}{delta}");
         }
 
-        // Базовый риск заказа = ровно то, что написано в карточке.
-        // Случайное событие может ЯВНО изменить риск только для этого рейса.
-        //
-        // Пример: 28% + радиопомехи 8 п.п. = 36% фактического риска.
-        float failureChance = Mathf.Clamp01(order.risk + randomEvent.riskDelta);
-        bool success = UnityEngine.Random.value >= failureChance;
+        float failureChance =
+            Mathf.Clamp01(order.risk + randomEvent.riskDelta);
+        bool success =
+            UnityEngine.Random.value >= failureChance;
+
         int payout = 0;
         string result;
 
-        if (success)
+        var returnPath = new List<Vector3>(path);
+        returnPath.Reverse();
+
+        if (!success)
         {
-            payout = Mathf.RoundToInt(order.reward * (order.urgency == 1 ? 1.25f : 1f));
+            // АВАРИЯ ДО ПОГРУЗКИ:
+            // контейнер вообще не двигается и остаётся в точке заказа.
+            int penalty = Mathf.RoundToInt(order.reward * .15f);
+
+            data.credits =
+                Mathf.Max(0,data.credits - penalty);
+            data.score -= 75;
+
+            rover.status = "Нужен осмотр";
+            rover.inspectionDone = false;
+            rover.damage = "";
+            rover.repairCost = 0;
+
+            // Дым включается сразу и больше сам не исчезает.
+            SetPersistentDamageSmoke(roverGo,true);
+
+            // Очень короткая авария без долгого стояния.
+            yield return StartCoroutine(
+                PlayQuickAccidentFx(roverGo));
+
+            result =
+                $"АВАРИЯ У ТОЧКИ ЗАКАЗА // груз не забран // -{penalty} кр. // {rover.roverName}: требуется диагностика";
+
+            // Ровер сразу возвращается пустым и продолжает дымиться.
+            yield return StartCoroutine(
+                MoveRoverAlongPath(roverGo,returnPath,5.5f));
+        }
+        else
+        {
+            // Только если аварии НЕ было — забираем груз.
+            GameObject cargoPackage =
+                CreatePickupCargo(orderGo,order);
+
+            // Переносимый контейнер уже создан, поэтому скрываем
+            // исходную точку заказа целиком: груз, маяк, подпись и подложку.
+            SetOrderPointVisualsVisible(orderGo,false);
+
+            yield return StartCoroutine(
+                AnimateCargoPickup(
+                    roverGo,cargoPackage,orderGo));
+
+            // На обратном пути ровер реально везёт контейнер.
+            StartCoroutine(
+                PlayRouteEventFx(roverGo,randomEvent));
+
+            yield return StartCoroutine(
+                MoveRoverAlongPath(
+                    roverGo,returnPath,6.0f));
+
+            roverGo.transform.position = home;
+            roverGo.transform.rotation = homeRotation;
+
+            // Разгрузка только после возвращения на базу.
+            if (cargoPackage != null)
+            {
+                yield return StartCoroutine(
+                    AnimateCargoDeliveryAtBase(
+                        roverGo,cargoPackage));
+            }
+
+            payout = Mathf.RoundToInt(
+                order.reward *
+                (order.urgency == 1 ? 1.25f : 1f));
+
             data.credits += payout;
-            data.score += payout + Mathf.RoundToInt((1f-order.risk)*100f);
+            data.score +=
+                payout +
+                Mathf.RoundToInt(
+                    (1f-order.risk)*100f);
+
             order.status = "Доставлен";
             rover.status = "Готов";
-            result = $"ДОСТАВКА ВЫПОЛНЕНА // {order.title} // +{payout} кр. // батарея -{needed:0}%";
+
+            result =
+                $"ДОСТАВКА ВЫПОЛНЕНА // {order.title} // +{payout} кр. // батарея -{needed:0}%";
+
             if (orderObjects.ContainsKey(order.id))
             {
                 Destroy(orderObjects[order.id]);
                 orderObjects.Remove(order.id);
             }
         }
-        else
-        {
-            int penalty = Mathf.RoundToInt(order.reward * .15f);
-            data.credits = Mathf.Max(0, data.credits - penalty);
-            data.score -= 75;
-            rover.status = "Нужен осмотр";
-            rover.inspectionDone = false;
-            rover.damage = "";
-            rover.repairCost = 0;
-            result = $"АВАРИЯ НА МАРШРУТЕ // доставка сорвана // -{penalty} кр. // {rover.roverName}: требуется диагностика";
-        }
 
-        if (success) data.deliveriesToday++;
+        roverGo.transform.position = home;
+        roverGo.transform.rotation = homeRotation;
+
+        if (success)
+            data.deliveriesToday++;
+
         data.deliveries.Add(new DeliveryData
         {
             id="D"+(data.deliveries.Count+1),
@@ -1852,23 +2360,743 @@ public class MoonCourierCrisisGame : MonoBehaviour
             batterySpent=needed,
             success=success,
             reward=payout,
-            eventText=result
+            eventText=result,
+            day=data.day
         });
-
-        // Возвращаемся тем же безопасным коридором: ровер не проходит сквозь другие машины и камни.
-        var returnPath = new List<Vector3>(path);
-        returnPath.Reverse();
-        yield return StartCoroutine(MoveRoverAlongPath(roverGo,returnPath,6.2f));
-        roverGo.transform.position = home;
-        roverGo.transform.rotation = homeRotation;
 
         AddEvent(result);
         Save();
+
         deliveryAnimating = false;
         UpdateRoverVisual(rover);
-        if (order.status == "Доставлен") selectedOrder = null;
+
+        if (order.status == "Доставлен")
+            selectedOrder = null;
+
         UpdateSelections();
         RefreshUI();
+    }
+
+    void SetOrderPointVisualsVisible(GameObject orderGo, bool visible)
+    {
+        if (orderGo == null) return;
+
+        foreach (var renderer in orderGo.GetComponentsInChildren<Renderer>(true))
+            renderer.enabled = visible;
+
+        foreach (var canvas in orderGo.GetComponentsInChildren<Canvas>(true))
+            canvas.enabled = visible;
+
+        foreach (var light in orderGo.GetComponentsInChildren<Light>(true))
+            light.enabled = visible;
+
+        foreach (var collider in orderGo.GetComponentsInChildren<Collider>(true))
+            collider.enabled = visible;
+    }
+
+    void SetOrderCargoVisible(GameObject orderGo, bool visible)
+    {
+        if (orderGo == null) return;
+        Transform cargo = orderGo.transform.Find("CargoVisual");
+        if (cargo != null) cargo.gameObject.SetActive(visible);
+    }
+
+    GameObject CreatePickupCargo(GameObject orderGo, OrderData order)
+    {
+        if (orderGo == null) return null;
+
+        Color cargoColor =
+            order.risk >= .4f ? Hex("C98243") :
+            order.urgency == 1 ? Hex("D8B24E") :
+                                 Hex("B8BFC2");
+
+        var cargo = new GameObject("TransitCargo");
+        cargo.transform.position =
+            orderGo.transform.TransformPoint(new Vector3(0,.39f,0));
+        cargo.transform.rotation = orderGo.transform.rotation;
+
+        Primitive(PrimitiveType.Cube,cargo.transform,"CargoBody",
+            Vector3.zero,new Vector3(1.05f,.48f,.82f),cargoColor);
+        Primitive(PrimitiveType.Cube,cargo.transform,"CargoLid",
+            new Vector3(0,.275f,0),new Vector3(1.10f,.07f,.87f),Hex("EEF1F2"));
+
+        Color marking =
+            order.risk <= .20f ? green :
+            order.risk < .4f ? amber : red;
+
+        Primitive(PrimitiveType.Cube,cargo.transform,"CargoMark",
+            new Vector3(0,0,-.425f),new Vector3(.66f,.13f,.025f),marking);
+
+        for (int side=-1; side<=1; side+=2)
+        {
+            Primitive(PrimitiveType.Cube,cargo.transform,"CargoCorner",
+                new Vector3(side*.49f,0,0),
+                new Vector3(.05f,.53f,.86f),Hex("39444A"));
+        }
+
+        // Переносимый маяк контейнера.
+        Primitive(PrimitiveType.Cylinder,cargo.transform,"TransitMast",
+            new Vector3(0,.55f,0),new Vector3(.055f,.26f,.055f),Hex("B8C5CB"));
+        var signal = Primitive(PrimitiveType.Sphere,cargo.transform,"TransitSignal",
+            new Vector3(0,.84f,0),new Vector3(.28f,.28f,.28f),marking);
+
+        var signalLight = signal.AddComponent<Light>();
+        signalLight.type = LightType.Point;
+        signalLight.range = 3.6f;
+        signalLight.intensity = 1.25f;
+        signalLight.color = marking;
+
+        return cargo;
+    }
+
+    IEnumerator AnimateCargoPickup(
+        GameObject roverGo,
+        GameObject cargo,
+        GameObject orderGo)
+    {
+        if (roverGo == null || cargo == null) yield break;
+
+        Vector3 start = cargo.transform.position;
+        Quaternion startRot = cargo.transform.rotation;
+
+        Vector3 targetLocal = new Vector3(0,1.50f,1.08f);
+        Vector3 targetWorld = roverGo.transform.TransformPoint(targetLocal);
+        Quaternion targetRot = roverGo.transform.rotation;
+
+        StartCoroutine(
+            PlayPulseLightAtPoint(
+                start + Vector3.up*.18f,Hex("63D7F0"),1.8f,.55f));
+
+        float elapsed = 0f;
+        const float duration = .78f;
+
+        while (elapsed < duration && cargo != null)
+        {
+            elapsed += Time.deltaTime;
+            float p = Mathf.Clamp01(elapsed/duration);
+            float smooth = p*p*(3f-2f*p);
+
+            targetWorld = roverGo.transform.TransformPoint(targetLocal);
+
+            Vector3 pos = Vector3.Lerp(start,targetWorld,smooth);
+            pos.y += Mathf.Sin(p*Mathf.PI)*.58f;
+
+            cargo.transform.position = pos;
+            cargo.transform.rotation =
+                Quaternion.Slerp(startRot,targetRot,smooth);
+            yield return null;
+        }
+
+        if (cargo != null && roverGo != null)
+        {
+            cargo.transform.SetParent(roverGo.transform,true);
+            cargo.transform.localPosition = targetLocal;
+            cargo.transform.localRotation = Quaternion.identity;
+
+            Vector3 lockPos = cargo.transform.position;
+            SpawnDirectionalBurst(
+                lockPos + roverGo.transform.right*.42f,
+                roverGo.transform.up,
+                Hex("69DFF4"),6,.42f,.035f,.28f,0f);
+            SpawnDirectionalBurst(
+                lockPos - roverGo.transform.right*.42f,
+                roverGo.transform.up,
+                Hex("69DFF4"),6,.42f,.035f,.28f,0f);
+        }
+
+        yield return new WaitForSeconds(.14f);
+    }
+
+    IEnumerator AnimateCargoDeliveryAtBase(
+        GameObject roverGo,
+        GameObject cargo)
+    {
+        if (roverGo == null || cargo == null) yield break;
+
+        cargo.transform.SetParent(null,true);
+
+        Vector3 start = cargo.transform.position;
+        Quaternion startRot = cargo.transform.rotation;
+
+        Vector3 end =
+            roverGo.transform.position +
+            roverGo.transform.right*1.85f -
+            roverGo.transform.forward*.35f;
+        end.y = TerrainHeightAt(end.x,end.z) + .34f;
+
+        Quaternion endRot =
+            Quaternion.Euler(0,roverGo.transform.eulerAngles.y,0);
+
+        StartCoroutine(
+            PlayPulseLightFx(roverGo,Hex("72DDB4"),1.8f,.65f));
+
+        float elapsed = 0f;
+        const float duration = .78f;
+
+        while (elapsed < duration && cargo != null)
+        {
+            elapsed += Time.deltaTime;
+            float p = Mathf.Clamp01(elapsed/duration);
+            float smooth = p*p*(3f-2f*p);
+
+            Vector3 pos = Vector3.Lerp(start,end,smooth);
+            pos.y += Mathf.Sin(p*Mathf.PI)*.42f;
+
+            cargo.transform.position = pos;
+            cargo.transform.rotation =
+                Quaternion.Slerp(startRot,endRot,smooth);
+            yield return null;
+        }
+
+        if (cargo != null)
+        {
+            SpawnRadialBurst(
+                end + Vector3.up*.22f,
+                Hex("79E0B8"),18,.56f,.045f,.45f,-.06f);
+
+            float fade = 0f;
+            Vector3 startScale = cargo.transform.localScale;
+
+            while (fade < 1f && cargo != null)
+            {
+                fade += Time.deltaTime/.34f;
+                float p = Mathf.Clamp01(fade);
+
+                cargo.transform.localScale =
+                    Vector3.Lerp(
+                        startScale,new Vector3(.08f,.08f,.08f),p);
+                cargo.transform.position =
+                    Vector3.Lerp(end,end + Vector3.up*.42f,p);
+
+                yield return null;
+            }
+
+            if (cargo != null) Destroy(cargo);
+        }
+    }
+
+    IEnumerator PlayQuickAccidentFx(GameObject roverGo)
+    {
+        if (roverGo == null) yield break;
+
+        Vector3 impact =
+            roverGo.transform.position +
+            roverGo.transform.right*.68f +
+            roverGo.transform.up*.94f;
+
+        StartCoroutine(
+            PlayPulseLightAtPoint(
+                impact,Hex("FF5949"),4.6f,.42f));
+
+        // Один чёткий удар, а не длинная серия.
+        SpawnDirectionalBurst(
+            impact,
+            roverGo.transform.right + Vector3.up*.46f,
+            Hex("FFC15A"),24,2.30f,.045f,.62f,.72f);
+
+        SpawnDirectionalBurst(
+            impact,
+            roverGo.transform.right + Vector3.up*.20f,
+            Hex("F16B50"),10,1.35f,.060f,.56f,.40f);
+
+        Vector3 basePos =
+            roverGo.transform.position;
+        Quaternion baseRot =
+            roverGo.transform.rotation;
+
+        float elapsed = 0f;
+        const float duration = .42f;
+
+        while (elapsed < duration && roverGo != null)
+        {
+            elapsed += Time.deltaTime;
+
+            float p =
+                Mathf.Clamp01(elapsed/duration);
+
+            float damp =
+                1f-p;
+
+            roverGo.transform.position =
+                basePos +
+                roverGo.transform.right *
+                Mathf.Sin(p*Mathf.PI*4f) *
+                .045f *
+                damp;
+
+            roverGo.transform.rotation =
+                baseRot *
+                Quaternion.Euler(
+                    0,
+                    0,
+                    Mathf.Sin(p*Mathf.PI*3f) *
+                    1.8f *
+                    damp);
+
+            yield return null;
+        }
+
+        if (roverGo != null)
+        {
+            roverGo.transform.position = basePos;
+            roverGo.transform.rotation = baseRot;
+        }
+
+        // Небольшая пауза после удара — затем сразу обратный путь.
+        yield return new WaitForSeconds(.10f);
+    }
+
+    IEnumerator PlayRouteEventFx(
+        GameObject roverGo,
+        RouteRandomEvent routeEvent)
+    {
+        if (roverGo == null ||
+            string.IsNullOrEmpty(routeEvent.title))
+            yield break;
+
+        yield return new WaitForSeconds(.32f);
+
+        if (routeEvent.title == "РЫХЛЫЙ РЕГОЛИТ")
+            yield return StartCoroutine(
+                PlayRegolithDustFx(roverGo));
+        else if (routeEvent.title == "СОЛНЕЧНОЕ ОКНО")
+            yield return StartCoroutine(
+                PlaySolarWindowFx(roverGo));
+        else if (routeEvent.title == "АВАРИЙНЫЙ КОНТЕЙНЕР")
+            yield return StartCoroutine(
+                PlayFoundContainerFx(roverGo));
+        else if (routeEvent.title == "РАДИОПОМЕХИ")
+            yield return StartCoroutine(
+                PlayRadioInterferenceFx(roverGo));
+    }
+
+    IEnumerator PlayRegolithDustFx(GameObject roverGo)
+    {
+        if (roverGo == null) yield break;
+
+        float elapsed = 0f;
+        while (elapsed < 1.05f && roverGo != null)
+        {
+            elapsed += Time.deltaTime;
+
+            Vector3 rear =
+                roverGo.transform.position +
+                roverGo.transform.forward*1.05f +
+                Vector3.up*.16f;
+
+            SpawnDirectionalBurst(
+                rear + roverGo.transform.right*.70f,
+                -roverGo.transform.forward + Vector3.up*.16f,
+                Hex("99958E"),4,.68f,.14f,.56f,.12f);
+
+            SpawnDirectionalBurst(
+                rear - roverGo.transform.right*.70f,
+                -roverGo.transform.forward + Vector3.up*.16f,
+                Hex("99958E"),4,.68f,.14f,.56f,.12f);
+
+            yield return new WaitForSeconds(.10f);
+        }
+    }
+
+    IEnumerator PlaySolarWindowFx(GameObject roverGo)
+    {
+        if (roverGo == null) yield break;
+
+        StartCoroutine(
+            PlayPulseLightFx(
+                roverGo,Hex("FFD86A"),2.15f,1.0f));
+
+        for (int wave=0; wave<3; wave++)
+        {
+            if (roverGo == null) yield break;
+
+            Vector3 p =
+                roverGo.transform.position +
+                roverGo.transform.up*1.42f +
+                roverGo.transform.forward*.12f;
+
+            SpawnRadialBurst(
+                p,Hex("FFE18A"),12,.46f,.043f,.52f,-.08f);
+
+            yield return new WaitForSeconds(.20f);
+        }
+    }
+
+    IEnumerator PlayFoundContainerFx(GameObject roverGo)
+    {
+        if (roverGo == null) yield break;
+
+        var marker = new GameObject("FoundContainerFX");
+        Vector3 basePos =
+            roverGo.transform.position -
+            roverGo.transform.right*1.45f +
+            roverGo.transform.forward*.20f;
+
+        marker.transform.position =
+            new Vector3(
+                basePos.x,
+                TerrainHeightAt(basePos.x,basePos.z)+.28f,
+                basePos.z);
+
+        Primitive(
+            PrimitiveType.Cube,
+            marker.transform,
+            "FoundBox",
+            Vector3.zero,
+            new Vector3(.48f,.34f,.44f),
+            Hex("C9983E"));
+
+        Primitive(
+            PrimitiveType.Cube,
+            marker.transform,
+            "FoundBand",
+            new Vector3(0,.18f,0),
+            new Vector3(.52f,.035f,.48f),
+            Hex("FFE083"));
+
+        StartCoroutine(
+            PlayPulseLightAt(
+                marker.transform,Hex("E9B94D"),1.9f,.72f));
+
+        Vector3 start = marker.transform.position;
+        float elapsed = 0f;
+
+        while (elapsed < .76f && marker != null)
+        {
+            elapsed += Time.deltaTime;
+            float p = Mathf.Clamp01(elapsed/.76f);
+
+            marker.transform.position =
+                start + Vector3.up*(p*.68f);
+
+            marker.transform.Rotate(
+                Vector3.up,115f*Time.deltaTime,Space.World);
+
+            if (p > .58f)
+                marker.transform.localScale =
+                    Vector3.Lerp(
+                        Vector3.one,
+                        Vector3.one*.08f,
+                        (p-.58f)/.42f);
+
+            yield return null;
+        }
+
+        if (marker != null) Destroy(marker);
+    }
+
+    IEnumerator PlayRadioInterferenceFx(GameObject roverGo)
+    {
+        if (roverGo == null) yield break;
+
+        Transform head =
+            roverGo.transform.Find("Sensor Head");
+
+        Vector3 center =
+            head != null
+            ? head.position
+            : roverGo.transform.position + Vector3.up*2.05f;
+
+        for (int pulse=0; pulse<5; pulse++)
+        {
+            if (roverGo == null) yield break;
+
+            CreateElectricArc(
+                center + UnityEngine.Random.insideUnitSphere*.18f,
+                center + UnityEngine.Random.onUnitSphere*.68f,
+                Hex("67DDF2"));
+
+            SpawnDirectionalBurst(
+                center,
+                Vector3.up,
+                Hex("7DE8F7"),
+                5,1.10f,.034f,.29f,-.10f);
+
+            yield return new WaitForSeconds(.11f);
+        }
+    }
+
+    void SpawnDirectionalBurst(
+        Vector3 position,
+        Vector3 direction,
+        Color color,
+        int count,
+        float speed,
+        float size,
+        float lifetime,
+        float gravity)
+    {
+        var fx = new GameObject("DirectionalFX");
+        fx.transform.position = position;
+        fx.transform.rotation =
+            Quaternion.FromToRotation(
+                Vector3.forward,
+                direction.sqrMagnitude > .001f
+                    ? direction.normalized
+                    : Vector3.up);
+
+        var ps = fx.AddComponent<ParticleSystem>();
+        var main = ps.main;
+        main.duration = .12f;
+        main.loop = false;
+        main.startLifetime = lifetime;
+        main.startSpeed =
+            new ParticleSystem.MinMaxCurve(speed*.55f,speed);
+        main.startSize =
+            new ParticleSystem.MinMaxCurve(size*.60f,size*1.25f);
+        main.startColor = color;
+        main.gravityModifier = gravity;
+        main.simulationSpace =
+            ParticleSystemSimulationSpace.World;
+        main.maxParticles = Mathf.Max(24,count+4);
+
+        var emission = ps.emission;
+        emission.rateOverTime = 0f;
+        emission.SetBursts(new[]
+        {
+            new ParticleSystem.Burst(
+                0f,(short)Mathf.Clamp(count,1,120))
+        });
+
+        var shape = ps.shape;
+        shape.shapeType = ParticleSystemShapeType.Cone;
+        shape.angle = 24f;
+        shape.radius = .10f;
+
+        var col = ps.colorOverLifetime;
+        col.enabled = true;
+
+        Gradient gradient = new Gradient();
+        gradient.SetKeys(
+            new[]
+            {
+                new GradientColorKey(color,0f),
+                new GradientColorKey(color*.72f,1f)
+            },
+            new[]
+            {
+                new GradientAlphaKey(1f,0f),
+                new GradientAlphaKey(.65f,.55f),
+                new GradientAlphaKey(0f,1f)
+            });
+
+        col.color = gradient;
+
+        var renderer =
+            fx.GetComponent<ParticleSystemRenderer>();
+        renderer.renderMode =
+            ParticleSystemRenderMode.Billboard;
+
+        var mat = NewLineMaterial(color);
+        if (mat != null) renderer.material = mat;
+
+        ps.Play();
+        Destroy(fx,lifetime+.55f);
+    }
+
+    void SpawnRadialBurst(
+        Vector3 position,
+        Color color,
+        int count,
+        float speed,
+        float size,
+        float lifetime,
+        float gravity)
+    {
+        var fx = new GameObject("RadialFX");
+        fx.transform.position = position;
+
+        var ps = fx.AddComponent<ParticleSystem>();
+        var main = ps.main;
+        main.duration = .10f;
+        main.loop = false;
+        main.startLifetime = lifetime;
+        main.startSpeed =
+            new ParticleSystem.MinMaxCurve(speed*.45f,speed);
+        main.startSize =
+            new ParticleSystem.MinMaxCurve(size*.65f,size*1.20f);
+        main.startColor = color;
+        main.gravityModifier = gravity;
+        main.simulationSpace =
+            ParticleSystemSimulationSpace.World;
+        main.maxParticles = Mathf.Max(24,count+4);
+
+        var emission = ps.emission;
+        emission.rateOverTime = 0f;
+        emission.SetBursts(new[]
+        {
+            new ParticleSystem.Burst(
+                0f,(short)Mathf.Clamp(count,1,120))
+        });
+
+        var shape = ps.shape;
+        shape.shapeType = ParticleSystemShapeType.Sphere;
+        shape.radius = .18f;
+
+        var col = ps.colorOverLifetime;
+        col.enabled = true;
+
+        Gradient gradient = new Gradient();
+        gradient.SetKeys(
+            new[]
+            {
+                new GradientColorKey(color,0f),
+                new GradientColorKey(color*.75f,1f)
+            },
+            new[]
+            {
+                new GradientAlphaKey(1f,0f),
+                new GradientAlphaKey(.45f,.68f),
+                new GradientAlphaKey(0f,1f)
+            });
+
+        col.color = gradient;
+
+        var renderer =
+            fx.GetComponent<ParticleSystemRenderer>();
+        renderer.renderMode =
+            ParticleSystemRenderMode.Billboard;
+
+        var mat = NewLineMaterial(color);
+        if (mat != null) renderer.material = mat;
+
+        ps.Play();
+        Destroy(fx,lifetime+.55f);
+    }
+
+    void CreateElectricArc(
+        Vector3 start,
+        Vector3 end,
+        Color color)
+    {
+        var go = new GameObject("RadioArc");
+        var lr = go.AddComponent<LineRenderer>();
+        lr.useWorldSpace = true;
+        lr.positionCount = 7;
+        lr.startWidth = .035f;
+        lr.endWidth = .012f;
+        lr.numCornerVertices = 2;
+        lr.startColor = color;
+        lr.endColor =
+            new Color(color.r,color.g,color.b,0f);
+
+        var mat = NewLineMaterial(color);
+        if (mat != null) lr.material = mat;
+
+        for (int i=0;i<lr.positionCount;i++)
+        {
+            float t =
+                i/(float)(lr.positionCount-1);
+
+            Vector3 p =
+                Vector3.Lerp(start,end,t);
+
+            if (i>0 && i<lr.positionCount-1)
+                p +=
+                    UnityEngine.Random.insideUnitSphere*.10f;
+
+            lr.SetPosition(i,p);
+        }
+
+        Destroy(go,.16f);
+    }
+
+    IEnumerator PlayPulseLightFx(
+        GameObject roverGo,
+        Color color,
+        float peak,
+        float duration)
+    {
+        if (roverGo == null) yield break;
+
+        var fx = new GameObject("PulseLightFX");
+        fx.transform.SetParent(roverGo.transform,false);
+        fx.transform.localPosition =
+            new Vector3(0,1.35f,.25f);
+
+        var light = fx.AddComponent<Light>();
+        light.type = LightType.Point;
+        light.color = color;
+        light.range = 4.2f;
+        light.intensity = 0f;
+
+        float elapsed = 0f;
+        while (elapsed < duration && fx != null)
+        {
+            elapsed += Time.deltaTime;
+            float p =
+                Mathf.Clamp01(elapsed/duration);
+
+            light.intensity =
+                Mathf.Sin(p*Mathf.PI)*peak;
+
+            yield return null;
+        }
+
+        if (fx != null) Destroy(fx);
+    }
+
+    IEnumerator PlayPulseLightAt(
+        Transform target,
+        Color color,
+        float peak,
+        float duration)
+    {
+        if (target == null) yield break;
+
+        var light =
+            target.gameObject.AddComponent<Light>();
+        light.type = LightType.Point;
+        light.color = color;
+        light.range = 3.2f;
+        light.intensity = 0f;
+
+        float elapsed = 0f;
+        while (elapsed < duration && target != null)
+        {
+            elapsed += Time.deltaTime;
+            float p =
+                Mathf.Clamp01(elapsed/duration);
+
+            if (light != null)
+                light.intensity =
+                    Mathf.Sin(p*Mathf.PI)*peak;
+
+            yield return null;
+        }
+
+        if (light != null) Destroy(light);
+    }
+
+    IEnumerator PlayPulseLightAtPoint(
+        Vector3 point,
+        Color color,
+        float peak,
+        float duration)
+    {
+        var fx = new GameObject("ImpactFlash");
+        fx.transform.position = point;
+
+        var light = fx.AddComponent<Light>();
+        light.type = LightType.Point;
+        light.color = color;
+        light.range = 4.8f;
+        light.intensity = 0f;
+
+        float elapsed = 0f;
+        while (elapsed < duration && fx != null)
+        {
+            elapsed += Time.deltaTime;
+            float p =
+                Mathf.Clamp01(elapsed/duration);
+
+            light.intensity =
+                Mathf.Sin(p*Mathf.PI)*peak;
+
+            yield return null;
+        }
+
+        if (fx != null) Destroy(fx);
     }
 
     Vector3 TerrainNormalAt(float x, float z)
@@ -1969,57 +3197,14 @@ public class MoonCourierCrisisGame : MonoBehaviour
     void NextDay()
     {
         if (deliveryAnimating) return;
-
-        // На третьем дне эта кнопка завершает игру.
-        if (data.day >= 3)
-        {
-            int expiredFinal = 0;
-            foreach (var o in data.orders)
-                if (o.status == "Ожидает") expiredFinal++;
-
-            if (expiredFinal > 0)
-                AddEvent($"КОНЕЦ ДНЯ 3 // просрочено заявок: {expiredFinal}");
-
-            AddEvent($"СМЕНА ЗАВЕРШЕНА // кредиты: {data.credits} // очки: {data.score}");
-            Save();
-            ShowSummary();
-            return;
-        }
-
-        // Невыполненные заявки относятся к конкретному дню и становятся просроченными.
-        int expired = 0;
-        foreach (var o in data.orders)
-            if (o.status == "Ожидает") expired++;
-
-        data.day++;
-        data.deliveriesToday = 0;
-        selectedOrder = null;
-
-        // Ночная подзарядка. Повреждение само не исчезает.
-        foreach (var r in data.rovers)
-        {
-            r.battery = Mathf.Min(100f, r.battery + 65f);
-            if (r.status == "В пути") r.status = "Готов";
-        }
-
-        PopulateOrdersForDay(data.day);
-
-        AddEvent($"ДЕНЬ {data.day} // новые заявки в постоянных точках // просрочено вчера: {expired}");
-        AddEvent($"БРИФИНГ // {DayBrief(data.day)}");
-
-        Save();
-
-        // Перестраиваем только динамические игровые объекты:
-        // база и сама Луна остаются на месте.
-        SpawnGameObjects();
-        UpdateSelections();
-        RefreshUI();
-
-        ShowToast($"День {data.day}: получены новые заявки.");
+        ShowDaySummary();
     }
 
     void NewGame()
     {
+        Time.timeScale = 1f;
+        pauseMenuOpen = false;
+        if (pauseOverlay != null) pauseOverlay.SetActive(false);
         StopAllCoroutines();
         deliveryAnimating = false;
         selectedRover = null;
@@ -2203,7 +3388,7 @@ public class MoonCourierCrisisGame : MonoBehaviour
         deliveriesText.text = data.deliveriesToday.ToString();
 
         if (nextDayButtonText != null)
-            nextDayButtonText.text = data.day >= 3 ? "ЗАВЕРШИТЬ" : "СЛЕДУЮЩИЙ ДЕНЬ";
+            nextDayButtonText.text = data.day >= 3 ? "ЗАВЕРШИТЬ СМЕНУ" : "ЗАВЕРШИТЬ ДЕНЬ";
 
         if (selectedRover == null)
         {
@@ -2285,14 +3470,162 @@ public class MoonCourierCrisisGame : MonoBehaviour
         RefreshRouteLine();
     }
 
+    void SetPersistentDamageSmoke(
+        GameObject roverGo,
+        bool active)
+    {
+        if (roverGo == null) return;
+
+        Transform existing =
+            roverGo.transform.Find(
+                "PersistentDamageSmoke");
+
+        GameObject smokeGo =
+            existing != null
+                ? existing.gameObject
+                : null;
+
+        ParticleSystem ps =
+            smokeGo != null
+                ? smokeGo.GetComponent<ParticleSystem>()
+                : null;
+
+        if (smokeGo == null && active)
+        {
+            smokeGo =
+                new GameObject(
+                    "PersistentDamageSmoke");
+
+            smokeGo.transform.SetParent(
+                roverGo.transform,false);
+
+            smokeGo.transform.localPosition =
+                new Vector3(.58f,1.02f,.70f);
+
+            ps =
+                smokeGo.AddComponent<ParticleSystem>();
+
+            var main = ps.main;
+            main.loop = true;
+            main.duration = 1.0f;
+            main.startLifetime =
+                new ParticleSystem.MinMaxCurve(
+                    .72f,1.18f);
+            main.startSpeed =
+                new ParticleSystem.MinMaxCurve(
+                    .18f,.38f);
+            main.startSize =
+                new ParticleSystem.MinMaxCurve(
+                    .11f,.24f);
+            main.startColor =
+                new ParticleSystem.MinMaxGradient(
+                    Hex("62696B"),
+                    Hex("343A3D"));
+            main.gravityModifier = -.10f;
+            main.simulationSpace =
+                ParticleSystemSimulationSpace.World;
+            main.maxParticles = 40;
+
+            var emission = ps.emission;
+            emission.rateOverTime =
+                new ParticleSystem.MinMaxCurve(
+                    7f,11f);
+
+            var shape = ps.shape;
+            shape.shapeType =
+                ParticleSystemShapeType.Cone;
+            shape.angle = 16f;
+            shape.radius = .09f;
+
+            var col =
+                ps.colorOverLifetime;
+            col.enabled = true;
+
+            Gradient gradient =
+                new Gradient();
+
+            gradient.SetKeys(
+                new[]
+                {
+                    new GradientColorKey(
+                        Hex("707679"),0f),
+                    new GradientColorKey(
+                        Hex("3F4548"),1f)
+                },
+                new[]
+                {
+                    new GradientAlphaKey(
+                        .72f,0f),
+                    new GradientAlphaKey(
+                        .38f,.58f),
+                    new GradientAlphaKey(
+                        0f,1f)
+                });
+
+            col.color = gradient;
+
+            var size =
+                ps.sizeOverLifetime;
+            size.enabled = true;
+            size.size =
+                new ParticleSystem.MinMaxCurve(
+                    1f,
+                    new AnimationCurve(
+                        new Keyframe(0f,.55f),
+                        new Keyframe(.5f,1.0f),
+                        new Keyframe(1f,1.45f)));
+
+            var renderer =
+                smokeGo.GetComponent<
+                    ParticleSystemRenderer>();
+
+            renderer.renderMode =
+                ParticleSystemRenderMode.Billboard;
+
+            var mat =
+                NewLineMaterial(
+                    Hex("555B5D"));
+
+            if (mat != null)
+                renderer.material = mat;
+        }
+
+        if (smokeGo == null || ps == null)
+            return;
+
+        smokeGo.SetActive(true);
+
+        if (active)
+        {
+            if (!ps.isPlaying)
+                ps.Play();
+        }
+        else
+        {
+            ps.Stop(
+                true,
+                ParticleSystemStopBehavior
+                    .StopEmittingAndClear);
+
+            smokeGo.SetActive(false);
+        }
+    }
+
     void UpdateRoverVisual(RoverData r)
     {
         if (!roverObjects.ContainsKey(r.id)) return;
         var chassis = roverObjects[r.id].transform.Find("Chassis");
         if (chassis != null)
             SetMaterial(chassis.gameObject, r.status == "Готов" ? Hex("D9E6EC") : Hex("8E5B62"), .15f, .25f);
-        var damageLamp = roverObjects[r.id].transform.Find("DamageIndicator");
-        if (damageLamp != null) damageLamp.gameObject.SetActive(r.status == "Нужен осмотр" || r.status == "Требуется ремонт");
+        bool damaged =
+            r.status == "Нужен осмотр" ||
+            r.status == "Требуется ремонт";
+
+        // При повреждении показываем только постоянный дым.
+        // Он исчезает только после полноценного ремонта.
+        SetPersistentDamageSmoke(
+            roverObjects[r.id],
+            damaged);
     }
 
     string StatusText(string s)
@@ -2326,7 +3659,7 @@ public class MoonCourierCrisisGame : MonoBehaviour
         try { File.WriteAllText(SavePath(), JsonUtility.ToJson(data,true)); } catch { }
     }
 
-    string SavePath() => Path.Combine(Application.persistentDataPath, "moon_courier_crisis_player_v24_strategicchoice_save.json");
+    string SavePath() => Path.Combine(Application.persistentDataPath, "moon_courier_crisis_player_v35_compilefix2_save.json");
 
     void AnimateWorld()
     {
